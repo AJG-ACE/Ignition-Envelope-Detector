@@ -1,6 +1,7 @@
 logger = system.util.getLogger("EnvelopeDetectorTimer")
 
 detectors = [
+	# Insert paths of UDTs - Examples given below
 	"[default]Anomaly_Detection/Line_4_Palletizer/M_10_Hoist",
 	"[default]Anomaly_Detection/Line_4_Palletizer/M_11_Apron",
     "[default]Anomaly_Detection/Line_4_Palletizer/M_12_End_Compression"
