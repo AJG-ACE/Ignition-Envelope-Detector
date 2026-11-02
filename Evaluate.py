@@ -2,18 +2,19 @@ def evaluate(basePath):
     """
     Evaluates one operational-envelope detector instance.
 
-    First stage:
+    Stage 1:
         Counts outside-envelope evaluations in a rolling sample window.
 
-    Second stage:
+    Stage 2:
         Counts abnormal completed minutes in a rolling 60-minute window.
+
+    Reporting:
+        Generates one Hourly_Alert_Pulse for each completed clock hour
+        that meets Min_Alert_Minutes.
 
     Args:
         basePath:
-            Fully qualified path to the detector folder or UDT instance.
-
-            Example:
-            [default]Anomaly_Detection/Line_4_Palletizer/M_12_End_Compression
+            Fully qualified path to the detector UDT instance.
 
     Returns:
         True if evaluation completes successfully.
@@ -30,7 +31,9 @@ def evaluate(basePath):
         basePath = str(basePath).rstrip("/")
 
         if not basePath:
-            logger.error("Detector called with an empty basePath.")
+            logger.error(
+                "Detector called with an empty basePath."
+            )
             return False
 
         # --------------------------------------------------------
@@ -55,6 +58,13 @@ def evaluate(basePath):
         minimumAlertMinutesPath = basePath + "/Min_Alert_Minutes"
         hourAlarmPath = basePath + "/Hour_Alarm"
 
+        currentHourOutsideCountPath = (
+            basePath + "/Current_Hour_Outside_Count"
+        )
+
+        lastHourKeyPath = basePath + "/Last_Hour_Key"
+        hourlyAlertPulsePath = basePath + "/Hourly_Alert_Pulse"
+
         lastMinuteKeyPath = basePath + "/Last_Minute_Key"
         lastMinuteResultPath = basePath + "/Last_Minute_Result"
 
@@ -76,7 +86,9 @@ def evaluate(basePath):
             hourHistoryPath,
             minimumAlertMinutesPath,
             lastMinuteKeyPath,
-            lastMinuteResultPath
+            lastMinuteResultPath,
+            currentHourOutsideCountPath,
+            lastHourKeyPath
         ]
 
         values = system.tag.readBlocking(readPaths)
@@ -87,7 +99,7 @@ def evaluate(basePath):
 
         if len(values) != len(readPaths):
             status = (
-                "Read count mismatch: expected %d values, received %d"
+                "Read count mismatch: expected %d, received %d"
                 % (
                     len(readPaths),
                     len(values)
@@ -106,9 +118,11 @@ def evaluate(basePath):
                 [
                     rollingAlarmPath,
                     hourAlarmPath,
+                    hourlyAlertPulsePath,
                     detectorStatusPath
                 ],
                 [
+                    False,
                     False,
                     False,
                     status
@@ -121,30 +135,39 @@ def evaluate(basePath):
         # QUALITY CHECK
         # --------------------------------------------------------
 
-        badQualityPaths = []
+        badQualityDetails = []
 
         for index in range(len(values)):
             if not values[index].quality.isGood():
-                badQualityPaths.append(readPaths[index])
+                badQualityDetails.append(
+                    "%s=%s"
+                    % (
+                        readPaths[index],
+                        values[index].quality
+                    )
+                )
 
-        if badQualityPaths:
+        if badQualityDetails:
             status = (
-                "Skipped: bad quality on %s"
-                % ", ".join(badQualityPaths)
+                "Skipped: bad quality | %s"
+                % " | ".join(badQualityDetails)
             )
 
             system.tag.writeBlocking(
                 [
                     rollingAlarmPath,
                     hourAlarmPath,
+                    hourlyAlertPulsePath,
                     detectorStatusPath
                 ],
                 [
                     False,
                     False,
+                    False,
                     status
                 ]
             )
+
 
             logger.warn(
                 "%s | Detector=%s"
@@ -157,7 +180,7 @@ def evaluate(basePath):
             return False
 
         # --------------------------------------------------------
-        # CONVERT INPUT VALUES
+        # CONVERT VALUES
         # --------------------------------------------------------
 
         actual = float(values[0].value)
@@ -165,9 +188,9 @@ def evaluate(basePath):
         upper = float(values[2].value)
 
         tolerancePercent = float(values[3].value)
-
         windowSeconds = float(values[4].value)
         sampleIntervalSeconds = float(values[5].value)
+
         minimumOutsideSamples = int(values[6].value)
 
         outsideHistoryText = str(
@@ -188,20 +211,32 @@ def evaluate(basePath):
             values[11].value
         )
 
+        currentHourOutsideCount = int(
+            values[12].value or 0
+        )
+
+        lastHourKey = long(
+            values[13].value or 0
+        )
+
         # --------------------------------------------------------
         # CONFIGURATION VALIDATION
         # --------------------------------------------------------
 
         if upper <= lower:
-            status = "Invalid envelope: MAX must exceed MIN"
+            status = (
+                "Invalid envelope: SERVO_MAX must exceed SERVO_MIN"
+            )
 
             system.tag.writeBlocking(
                 [
                     rollingAlarmPath,
                     hourAlarmPath,
+                    hourlyAlertPulsePath,
                     detectorStatusPath
                 ],
                 [
+                    False,
                     False,
                     False,
                     status
@@ -230,9 +265,11 @@ def evaluate(basePath):
                 [
                     rollingAlarmPath,
                     hourAlarmPath,
+                    hourlyAlertPulsePath,
                     detectorStatusPath
                 ],
                 [
+                    False,
                     False,
                     False,
                     status
@@ -263,9 +300,11 @@ def evaluate(basePath):
                 [
                     rollingAlarmPath,
                     hourAlarmPath,
+                    hourlyAlertPulsePath,
                     detectorStatusPath
                 ],
                 [
+                    False,
                     False,
                     False,
                     status
@@ -282,7 +321,6 @@ def evaluate(basePath):
 
             return False
 
-        # Calculate the number of evaluations in the short window.
         windowSize = max(
             1,
             int(
@@ -303,9 +341,11 @@ def evaluate(basePath):
                 [
                     rollingAlarmPath,
                     hourAlarmPath,
+                    hourlyAlertPulsePath,
                     detectorStatusPath
                 ],
                 [
+                    False,
                     False,
                     False,
                     status
@@ -336,9 +376,11 @@ def evaluate(basePath):
                 [
                     rollingAlarmPath,
                     hourAlarmPath,
+                    hourlyAlertPulsePath,
                     detectorStatusPath
                 ],
                 [
+                    False,
                     False,
                     False,
                     status
@@ -368,9 +410,11 @@ def evaluate(basePath):
                 [
                     rollingAlarmPath,
                     hourAlarmPath,
+                    hourlyAlertPulsePath,
                     detectorStatusPath
                 ],
                 [
+                    False,
                     False,
                     False,
                     status
@@ -388,7 +432,7 @@ def evaluate(basePath):
             return False
 
         # --------------------------------------------------------
-        # FIRST WINDOW: SAMPLE-LEVEL EVALUATION
+        # STAGE 1: SAMPLE-LEVEL ROLLING WINDOW
         # --------------------------------------------------------
 
         envelopeWidth = upper - lower
@@ -409,8 +453,6 @@ def evaluate(basePath):
         ]
 
         outsideHistory.append(outside)
-
-        # Retain only the latest configured number of samples.
         outsideHistory = outsideHistory[-windowSize:]
 
         outsideCount = sum(
@@ -429,7 +471,7 @@ def evaluate(basePath):
         )
 
         # --------------------------------------------------------
-        # SECOND WINDOW: MINUTE-LEVEL EVALUATION
+        # RESTORE MINUTE-LEVEL HISTORY
         # --------------------------------------------------------
 
         hourHistory = [
@@ -438,40 +480,49 @@ def evaluate(basePath):
             if item in ("0", "1")
         ]
 
-        # Correct a previously oversized history.
         hourHistory = hourHistory[-60:]
 
         now = system.date.now()
+        nowMillis = system.date.toMillis(now)
 
-        # Unique integer for the current clock minute.
         currentMinuteKey = long(
-            system.date.toMillis(now) // 60000
+            nowMillis // 60000
         )
 
+        currentHourKey = long(
+            nowMillis // 3600000
+        )
+
+        # --------------------------------------------------------
+        # INITIALIZE FIXED HOUR BEFORE PROCESSING MINUTE BOUNDARY
+        # --------------------------------------------------------
+
+        if lastHourKey <= 0:
+            lastHourKey = currentHourKey
+
+        # --------------------------------------------------------
+        # COMPLETED-MINUTE PROCESSING
+        # --------------------------------------------------------
+
         if lastMinuteKey <= 0:
-            # First evaluation after deployment or state reset.
             lastMinuteKey = currentMinuteKey
             lastMinuteResult = rollingAlarm
 
         elif currentMinuteKey == lastMinuteKey:
-            # Still within the current clock minute.
-            #
-            # If Rolling_Alarm becomes true once during the minute,
-            # preserve true for the completed-minute result.
             lastMinuteResult = (
                 lastMinuteResult
                 or rollingAlarm
             )
 
         elif currentMinuteKey > lastMinuteKey:
-            # A new minute has started.
-            #
-            # Record exactly one result for the minute that just ended.
-            hourHistory.append(lastMinuteResult)
+            # The prior minute has completed.
+            completedMinuteResult = lastMinuteResult
 
-            # If the project or Gateway did not execute through one or
-            # more full minutes, add false entries for those missing
-            # clock-minute buckets.
+            # Existing rolling 60-minute history.
+            hourHistory.append(
+                completedMinuteResult
+            )
+
             skippedMinutes = (
                 currentMinuteKey
                 - lastMinuteKey
@@ -490,12 +541,19 @@ def evaluate(basePath):
 
             hourHistory = hourHistory[-60:]
 
-            # Begin accumulating the new minute.
+            # Fixed clock-hour reporting counter.
+            #
+            # Only count the completed minute in the previous
+            # fixed hour when the hour boundary has not yet been
+            # processed below.
+            if completedMinuteResult:
+                currentHourOutsideCount += 1
+
+            # Start tracking the new minute.
             lastMinuteKey = currentMinuteKey
             lastMinuteResult = rollingAlarm
 
         else:
-            # System clock moved backward.
             logger.warn(
                 "Gateway clock moved backward | Detector=%s"
                 % basePath
@@ -503,6 +561,10 @@ def evaluate(basePath):
 
             lastMinuteKey = currentMinuteKey
             lastMinuteResult = rollingAlarm
+
+        # --------------------------------------------------------
+        # EXISTING ROLLING 60-MINUTE ALARM
+        # --------------------------------------------------------
 
         abnormalMinuteCount = sum(
             1
@@ -520,29 +582,77 @@ def evaluate(basePath):
         )
 
         # --------------------------------------------------------
+        # FIXED CLOCK-HOUR REPORTING EVENT
+        # --------------------------------------------------------
+
+        # False during normal evaluations.
+        # True for one timer cycle when an anomalous hour completes.
+        hourlyAlertPulse = False
+
+        if currentHourKey > lastHourKey:
+            completedHourOutsideCount = (
+                currentHourOutsideCount
+            )
+
+            if (
+                completedHourOutsideCount
+                >= minimumAlertMinutes
+            ):
+                hourlyAlertPulse = True
+
+                logger.info(
+                    "Hourly reporting event | "
+                    "Detector=%s | "
+                    "AbnormalMinutes=%d | "
+                    "Threshold=%d"
+                    % (
+                        basePath,
+                        completedHourOutsideCount,
+                        minimumAlertMinutes
+                    )
+                )
+
+            currentHourOutsideCount = 0
+            lastHourKey = currentHourKey
+
+        elif currentHourKey < lastHourKey:
+            logger.warn(
+                "Gateway clock moved backward at hour level | "
+                "Detector=%s"
+                % basePath
+            )
+
+            currentHourOutsideCount = 0
+            lastHourKey = currentHourKey
+
+        # --------------------------------------------------------
         # DETECTOR STATUS
         # --------------------------------------------------------
 
         if not minuteWindowReady:
             status = (
                 "Filling minute: %d/%d samples | "
-                "Actual=%.2f | Range=%.2f to %.2f | "
-                "Hour=%d/60 minutes"
+                "Actual=%.2f | "
+                "Range=%.2f to %.2f | "
+                "Rolling hour=%d/60 | "
+                "Clock hour abnormal=%d"
                 % (
                     len(outsideHistory),
                     windowSize,
                     actual,
                     effectiveLower,
                     effectiveUpper,
-                    len(hourHistory)
+                    len(hourHistory),
+                    currentHourOutsideCount
                 )
             )
 
         elif not hourWindowReady:
             status = (
                 "Minute=%s (%d/%d outside) | "
-                "Filling hour=%d/60 | "
-                "Abnormal minutes=%d"
+                "Filling rolling hour=%d/60 | "
+                "Rolling abnormal=%d | "
+                "Clock hour abnormal=%d"
                 % (
                     (
                         "ALERT"
@@ -552,14 +662,17 @@ def evaluate(basePath):
                     outsideCount,
                     windowSize,
                     len(hourHistory),
-                    abnormalMinuteCount
+                    abnormalMinuteCount,
+                    currentHourOutsideCount
                 )
             )
 
         elif hourAlarm:
             status = (
-                "HOUR ALARM: %d/60 abnormal minutes | "
-                "Threshold=%d | Current minute=%s"
+                "HOUR ALARM: %d/60 rolling abnormal | "
+                "Threshold=%d | "
+                "Current minute=%s | "
+                "Clock hour abnormal=%d"
                 % (
                     abnormalMinuteCount,
                     minimumAlertMinutes,
@@ -567,14 +680,17 @@ def evaluate(basePath):
                         "ALERT"
                         if rollingAlarm
                         else "Normal"
-                    )
+                    ),
+                    currentHourOutsideCount
                 )
             )
 
         else:
             status = (
-                "Hour normal: %d/60 abnormal minutes | "
-                "Threshold=%d | Current minute=%s"
+                "Hour normal: %d/60 rolling abnormal | "
+                "Threshold=%d | "
+                "Current minute=%s | "
+                "Clock hour abnormal=%d"
                 % (
                     abnormalMinuteCount,
                     minimumAlertMinutes,
@@ -582,7 +698,8 @@ def evaluate(basePath):
                         "ALERT"
                         if rollingAlarm
                         else "Normal"
-                    )
+                    ),
+                    currentHourOutsideCount
                 )
             )
 
@@ -597,6 +714,9 @@ def evaluate(basePath):
             hourHistoryPath,
             hourOutsideCountPath,
             hourAlarmPath,
+            currentHourOutsideCountPath,
+            lastHourKeyPath,
+            hourlyAlertPulsePath,
             lastMinuteKeyPath,
             lastMinuteResultPath,
             detectorStatusPath
@@ -615,6 +735,9 @@ def evaluate(basePath):
             ),
             abnormalMinuteCount,
             hourAlarm,
+            currentHourOutsideCount,
+            lastHourKey,
+            hourlyAlertPulse,
             lastMinuteKey,
             lastMinuteResult,
             status
@@ -632,7 +755,10 @@ def evaluate(basePath):
                 writeSucceeded = False
 
                 logger.error(
-                    "Write failed | Detector=%s | Tag=%s | Result=%s"
+                    "Write failed | "
+                    "Detector=%s | "
+                    "Tag=%s | "
+                    "Result=%s"
                     % (
                         basePath,
                         writePaths[index],
@@ -652,18 +778,20 @@ def evaluate(basePath):
             "%s | Detector=%s"
             % (
                 errorMessage,
-                basePath
+                str(basePath)
             )
         )
 
         try:
             system.tag.writeBlocking(
                 [
-                    basePath + "/Rolling_Alarm",
-                    basePath + "/Hour_Alarm",
-                    basePath + "/Detector_Status"
+                    str(basePath) + "/Rolling_Alarm",
+                    str(basePath) + "/Hour_Alarm",
+                    str(basePath) + "/Hourly_Alert_Pulse",
+                    str(basePath) + "/Detector_Status"
                 ],
                 [
+                    False,
                     False,
                     False,
                     errorMessage
@@ -675,7 +803,7 @@ def evaluate(basePath):
                 "Could not write failure state | "
                 "Detector=%s | Error=%s"
                 % (
-                    basePath,
+                    str(basePath),
                     str(writeError)
                 )
             )
