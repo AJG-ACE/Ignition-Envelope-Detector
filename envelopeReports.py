@@ -1130,6 +1130,233 @@ def getWeeklyReport(referenceDate=None):
     return report
 
 
+def getWeekToDateReport(referenceDate=None):
+    """
+    Builds an in-progress week-to-date report.
+
+    Current period:
+        Monday at midnight through the current date/time.
+
+    Comparison period:
+        Previous Monday at midnight through the equivalent
+        weekday/time during the previous week.
+
+    Example:
+        If run Wednesday at 11:00 AM:
+
+        Current:
+            Monday 00:00 through Wednesday 11:00
+
+        Previous:
+            Previous Monday 00:00 through previous Wednesday 11:00
+    """
+
+    if referenceDate is None:
+        referenceDate = system.date.now()
+
+    now = referenceDate
+
+    # Start of the current Monday-Sunday week.
+    currentWeekStart = _start_of_current_week(
+        now
+    )
+
+    # Start of previous week.
+    previousWeekStart = system.date.addWeeks(
+        currentWeekStart,
+        -1
+    )
+
+    # Match the exact elapsed time into the week.
+    elapsedMillis = (
+        system.date.toMillis(now)
+        - system.date.toMillis(currentWeekStart)
+    )
+
+    previousWeekEquivalentEnd = system.date.fromMillis(
+        system.date.toMillis(previousWeekStart)
+        + elapsedMillis
+    )
+
+    # --------------------------------------------------------
+    # QUERY JOURNAL EVENTS
+    # --------------------------------------------------------
+
+    currentEvents = _query_active_events(
+        currentWeekStart,
+        now
+    )
+
+    previousEvents = _query_active_events(
+        previousWeekStart,
+        previousWeekEquivalentEnd
+    )
+
+    currentCount = len(currentEvents)
+    previousCount = len(previousEvents)
+
+    # --------------------------------------------------------
+    # DAILY BREAKDOWN
+    # --------------------------------------------------------
+
+    # Determine how many calendar days of the current week
+    # need to appear in the report.
+    from java.util import Calendar
+
+    calendar = Calendar.getInstance()
+    calendar.setTime(now)
+
+    javaDayOfWeek = calendar.get(
+        Calendar.DAY_OF_WEEK
+    )
+
+    daysSinceMonday = (
+        javaDayOfWeek
+        - Calendar.MONDAY
+        + 7
+    ) % 7
+
+    numberOfDays = daysSinceMonday + 1
+
+    dailyRows = _count_by_day(
+        currentEvents,
+        currentWeekStart,
+        numberOfDays
+    )
+
+    # --------------------------------------------------------
+    # REPORT LABEL
+    # --------------------------------------------------------
+
+    periodLabel = (
+        "%s through %s"
+        % (
+            system.date.format(
+                currentWeekStart,
+                "MMM d, yyyy"
+            ),
+            system.date.format(
+                now,
+                "MMM d, yyyy h:mm a"
+            )
+        )
+    )
+
+    comparisonLabel = (
+        "%s through %s"
+        % (
+            system.date.format(
+                previousWeekStart,
+                "MMM d, yyyy"
+            ),
+            system.date.format(
+                previousWeekEquivalentEnd,
+                "MMM d, yyyy h:mm a"
+            )
+        )
+    )
+
+    # --------------------------------------------------------
+    # BUILD REPORT
+    # --------------------------------------------------------
+
+    report = {
+        "reportType": "weekToDate",
+
+        "periodStart": currentWeekStart,
+        "periodEnd": now,
+
+        "comparisonStart": previousWeekStart,
+        "comparisonEnd": previousWeekEquivalentEnd,
+
+        "periodLabel": periodLabel,
+        "comparisonLabel": comparisonLabel,
+
+        "currentCount": currentCount,
+        "previousCount": previousCount,
+
+        "comparison": _comparison(
+            currentCount,
+            previousCount
+        ),
+
+        "dailyRows": dailyRows,
+
+        "equipmentRows": _sorted_equipment_rows(
+            _count_by_equipment(
+                currentEvents
+            )
+        )
+    }
+
+    # --------------------------------------------------------
+    # SUBJECT
+    # --------------------------------------------------------
+
+    report["subject"] = (
+        "Week-to-Date Envelope Report - %s"
+        % system.date.format(
+            now,
+            "yyyy-MM-dd"
+        )
+    )
+
+    # --------------------------------------------------------
+    # TEXT FORMAT
+    # --------------------------------------------------------
+
+    lines = [
+        "WEEK-TO-DATE OPERATIONAL ENVELOPE REPORT",
+        "",
+        "Current period:",
+        periodLabel,
+        "",
+        "Comparison period:",
+        comparisonLabel,
+        "",
+        "Alerts this week to date: %d"
+        % currentCount,
+        "Alerts previous week to same point: %d"
+        % previousCount,
+        "Change: %s"
+        % report["comparison"]["plainText"],
+        "",
+        "DAILY BREAKDOWN"
+    ]
+
+    for row in dailyRows:
+        lines.append(
+            "%s (%s): %d"
+            % (
+                row["dayName"],
+                row["dateKey"],
+                row["count"]
+            )
+        )
+
+    lines.extend([
+        "",
+        "ALERTS BY EQUIPMENT"
+    ])
+
+    if report["equipmentRows"]:
+        for row in report["equipmentRows"]:
+            lines.append(
+                "%s: %d"
+                % (
+                    row["equipment"],
+                    row["count"]
+                )
+            )
+    else:
+        lines.append(
+            "No alerts recorded."
+        )
+
+    report["text"] = "\n".join(lines)
+
+    return report
+
 # ----------------------------------------------------------------
 # OPTIONAL EMAIL FUNCTIONS
 #
