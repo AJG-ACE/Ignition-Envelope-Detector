@@ -39,12 +39,12 @@ FINAL_ALARM_TAG_NAME = "Hourly_Alert_Pulse"
 #
 # This is not necessarily the same resource as an Alarm Notification
 # Profile under Alarming > Notification.
-EMAIL_PROFILE = "DPSG notifications"
+EMAIL_PROFILE = "DPSG notifications" # Insert your prefered ignition email profile here
 
-FROM_ADDRESS = "ignition-alerts@kdrp.com" # Need to figure this one out
+FROM_ADDRESS = "ignition-alerts@kdrp.com" # Insert From adress here
 
 REPORT_RECIPIENTS = [
-    "ashur.george@kdrp.com"
+    # Input Report Recipents Here
 ]
 
 LOGGER_NAME = "EnvelopeReports"
