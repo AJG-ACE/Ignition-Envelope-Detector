@@ -254,13 +254,16 @@ for event in events:
 
 ## Reporting
 
-The `envelopeReports` Project Library script provides:
+The `envelopeReports` Project Library script provides four report views:
 
 ```python
 envelopeReports.getCurrentDayReport()
+envelopeReports.getWeekToDateReport()
 envelopeReports.getDailyReport()
 envelopeReports.getWeeklyReport()
 ```
+
+All reports count journaled active events produced by `Hourly_Alert_Pulse` and group those events by the exact servo UDT instance extracted from the canonical alarm source.
 
 ### Current-day report
 
@@ -282,6 +285,40 @@ print
 print report["text"]
 ```
 
+### Week-to-date report
+
+Compares the current week from Monday at midnight through the current date and time against the equivalent elapsed period in the previous week.
+
+For example, when run on Wednesday at 11:00 AM, the comparison is:
+
+```text
+Current period:
+Monday 12:00 AM through Wednesday 11:00 AM
+
+Comparison period:
+Previous Monday 12:00 AM through previous Wednesday 11:00 AM
+```
+
+The result includes:
+
+- Total alerts this week to date
+- Total alerts during the same elapsed period last week
+- Percentage or absolute change
+- Daily counts for each elapsed day of the current week
+- Alert counts grouped by exact servo UDT instance
+
+Example:
+
+```python
+report = envelopeReports.getWeekToDateReport()
+
+print report["subject"]
+print
+print report["text"]
+```
+
+The week-to-date comparison intentionally uses the same elapsed point in the previous week. This avoids comparing a partial current week against a complete seven-day week.
+
 ### Completed-day report
 
 Compares yesterday against the day before yesterday.
@@ -291,14 +328,23 @@ report = envelopeReports.getDailyReport()
 print report["text"]
 ```
 
-### Weekly report
+### Completed-week report
 
-Compares the latest completed Monday-Sunday week against the completed week before it and includes a daily breakdown.
+Compares the latest completed Monday-Sunday week against the completed week before it and includes a seven-day breakdown.
 
 ```python
 report = envelopeReports.getWeeklyReport()
 print report["text"]
 ```
+
+### Report selection summary
+
+| Function | Current period | Comparison period |
+|---|---|---|
+| `getCurrentDayReport()` | Today from midnight through now | Yesterday through the same time |
+| `getWeekToDateReport()` | Current Monday through now | Previous Monday through the equivalent weekday and time |
+| `getDailyReport()` | Latest completed calendar day | Calendar day immediately before it |
+| `getWeeklyReport()` | Latest completed Monday-Sunday week | Completed Monday-Sunday week immediately before it |
 
 ### Reporting configuration
 
