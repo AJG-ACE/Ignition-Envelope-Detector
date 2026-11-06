@@ -1,50 +1,25 @@
 # ================================================================
 # ENVELOPE DETECTION REPORTING
-#
-# Project Library script name:
-#     envelopeReports
-#
-# Public functions:
-#     getDailyReport()
-#     getWeeklyReport()
-#     sendDailyReport()
-#     sendWeeklyReport()
-#
-# The daily report covers:
-#     Yesterday vs. the day before yesterday
-#
-# The weekly report covers:
-#     Last completed Monday-Sunday week
-#     vs. the completed week before it
+# Ignition 8.1 / Jython 2.7 compatible
 # ================================================================
-
 
 # ----------------------------------------------------------------
 # CONFIGURATION
 # ----------------------------------------------------------------
 
 JOURNAL_NAME = "Envelope_Alerts"
-
-# Because Anomaly_Journal is intended to contain only anomaly alarms,
-# this filter is primarily an additional safeguard.
 SOURCE_TEXT_REQUIRED = "Anomaly_Detection"
-
-# Only final hourly alarms should count as reportable alerts.
 FINAL_ALARM_TAG_NAME = "Hourly_Alert_Pulse"
 
-# Email settings.
-#
-# EMAIL_PROFILE must be a Gateway SMTP Email Profile under:
-# Gateway Config > Networking > Email Settings
-#
-# This is not necessarily the same resource as an Alarm Notification
-# Profile under Alarming > Notification.
-EMAIL_PROFILE = "DPSG notifications" # Insert your prefered ignition email profile here
+QUALITY_ALARM_TAG_NAME = "Input_Bad_Quality"
+QUALITY_ALARM_NAME = "Input_Bad_Quality_Event"
+QUALITY_LOOKBACK_DAYS = 30
 
-FROM_ADDRESS = "ignition-alerts@kdrp.com" # Insert From adress here
+EMAIL_PROFILE = "DPSG notifications"
+FROM_ADDRESS = "ignition-alerts@kdrp.com"
 
 REPORT_RECIPIENTS = [
-    # Input Report Recipents Here
+    "ashur.george@kdrp.com"
 ]
 
 LOGGER_NAME = "EnvelopeReports"
@@ -59,13 +34,6 @@ def _logger():
 
 
 def _end_exclusive(startOfNextPeriod):
-    """
-    queryJournal date ranges are inclusive.
-
-    Subtract one millisecond from the next period's start to avoid
-    counting the same midnight event in two adjacent periods.
-    """
-
     return system.date.addMillis(startOfNextPeriod, -1)
 
 
@@ -87,10 +55,6 @@ def _format_week_range(startDate, endExclusiveDate):
 
 
 def _event_text(event):
-    """
-    Returns a combined searchable representation of an alarm event.
-    """
-
     try:
         source = str(event.getSource())
     except:
@@ -132,124 +96,55 @@ def _event_source(event):
             return ""
 
 
-def _event_display_path(event):
-    try:
-        value = str(event.getDisplayPath())
-
-        if value:
-            return value
-    except:
-        pass
-
-    try:
-        value = str(event.getDisplayPathOrSource())
-
-        if value:
-            return value
-    except:
-        pass
-
-    return _event_source(event)
-
-
 def _event_time(event):
-    """
-    Retrieves the historical alarm event time.
-    """
-
     try:
-        return event.get("eventTime")
+        value = event.get("eventTime")
+        if value is not None:
+            return value
     except:
         pass
 
     try:
-        return event.getActiveData().getTimestamp()
+        activeData = event.getActiveData()
+        if activeData is not None:
+            return activeData.getTimestamp()
     except:
         pass
 
     return None
 
 
+def _event_id(event):
+    try:
+        return str(event.getId())
+    except:
+        return "%s|%s" % (
+            _event_source(event),
+            str(_active_time(event))
+        )
+
+
 # ----------------------------------------------------------------
-# EQUIPMENT-NAME HELPERS
+# EQUIPMENT NAME
 # ----------------------------------------------------------------
-
-def _clean_source_path(pathText):
-    """
-    Converts an Ignition alarm source path into a more readable path.
-
-    Example canonical source formats may contain sections such as:
-        prov:default:/tag:Anomaly_Detection/.../Hour_Alarm:/alm:Name
-
-    This function removes common Ignition source-path markers.
-    """
-
-    text = str(pathText or "")
-
-    replacements = [
-        ("prov:default:/tag:", ""),
-        ("prov:", ""),
-        (":/tag:", "/"),
-        (":/alm:", "/"),
-        ("[default]", "")
-    ]
-
-    for oldValue, newValue in replacements:
-        text = text.replace(oldValue, newValue)
-
-    return text.strip("/")
-
 
 def _equipment_name(event):
-    """
-    Extracts the servo / UDT instance name from the alarm source.
-
-    Example source:
-        prov:default:/tag:Anomaly_Detection/
-        Line_4_Palletizer/
-        M_12_End_Compression/
-        Hourly_Alert_Pulse:/
-        alm:Hourly_Envelope_Event
-
-    Returns:
-        M 12 End Compression
-    """
-
-    # Prefer explicit associated data if you add it later.
     try:
         if event.contains("Equipment"):
-            equipment = str(
-                event.get("Equipment")
-            )
-
+            equipment = str(event.get("Equipment"))
             if equipment:
                 return equipment
     except:
         pass
 
-    # For these alarms, Source is preferable to DisplayPath because
-    # Source contains the complete tag hierarchy.
-    source = _event_source(event)
-
-    source = str(
-        source or ""
-    )
-
-    # Remove the canonical Ignition provider/tag prefix.
+    source = str(_event_source(event) or "")
     prefix = "prov:default:/tag:"
 
     if source.startswith(prefix):
         source = source[len(prefix):]
 
-    # Remove the alarm portion.
-    #
-    # Example:
-    # Hourly_Alert_Pulse:/alm:Hourly_Envelope_Event
     if ":/alm:" in source:
-        source = source.split(
-            ":/alm:",
-            1
-        )[0]
+        source = source.split(":/alm:", 1)[0]
 
     sourceParts = [
         part
@@ -257,54 +152,60 @@ def _equipment_name(event):
         if part
     ]
 
-    # Expected structure:
-    #
-    # 0 = Anomaly_Detection
-    # 1 = Line_4_Palletizer
-    # 2 = M_12_End_Compression
-    # 3 = Hourly_Alert_Pulse
-    #
-    # The UDT instance is therefore immediately above the
-    # Hourly_Alert_Pulse member.
-
     if len(sourceParts) >= 2:
-        equipment = sourceParts[-2]
+        # Preserve the exact UDT instance name.
+        return sourceParts[-2]
 
-        return equipment.replace(
-            "_",
-            " "
-        )
+    return "Unknown_Equipment"
 
-    return "Unknown Equipment"
 
 # ----------------------------------------------------------------
-# JOURNAL QUERY
+# ALARM EVENT TIME HELPERS
+# ----------------------------------------------------------------
+
+def _active_time(event):
+    try:
+        activeData = event.getActiveData()
+        if activeData is not None:
+            return activeData.getTimestamp()
+    except:
+        pass
+
+    try:
+        return event.get("activeTime")
+    except:
+        return None
+
+
+def _clear_time(event):
+    try:
+        clearData = event.getClearedData()
+        if clearData is not None:
+            return clearData.getTimestamp()
+    except:
+        pass
+
+    try:
+        return event.get("clearTime")
+    except:
+        return None
+
+
+def _is_quality_event(event):
+    text = _event_text(event)
+
+    return (
+        QUALITY_ALARM_TAG_NAME in text
+        or QUALITY_ALARM_NAME in text
+    )
+
+
+# ----------------------------------------------------------------
+# JOURNAL QUERIES
 # ----------------------------------------------------------------
 
 def _query_active_events(startDate, endExclusiveDate):
-    """
-    Queries ACTIVE envelope alarm events from Anomaly_Journal.
-
-    Only active transitions are returned so that alarm clears and
-    acknowledgements are not counted as additional anomaly events.
-    """
-
     endDate = _end_exclusive(endExclusiveDate)
-
-    _logger().info(
-        "Querying %s from %s through %s"
-        % (
-            JOURNAL_NAME,
-            system.date.format(
-                startDate,
-                "yyyy-MM-dd HH:mm:ss"
-            ),
-            system.date.format(
-                endDate,
-                "yyyy-MM-dd HH:mm:ss"
-            )
-        )
-    )
 
     results = system.alarm.queryJournal(
         startDate=startDate,
@@ -318,7 +219,6 @@ def _query_active_events(startDate, endExclusiveDate):
     events = []
 
     for event in results:
-
         searchableText = _event_text(event)
 
         if SOURCE_TEXT_REQUIRED not in searchableText:
@@ -332,6 +232,147 @@ def _query_active_events(startDate, endExclusiveDate):
     return events
 
 
+def _query_quality_events(periodStart, periodEnd):
+    queryStart = system.date.addDays(
+        periodStart,
+        -QUALITY_LOOKBACK_DAYS
+    )
+
+    results = system.alarm.queryJournal(
+        startDate=queryStart,
+        endDate=periodEnd,
+        journalName=JOURNAL_NAME,
+        includeSystem=False,
+        includeShelved=False
+    )
+
+    eventsById = {}
+
+    for event in results:
+        if not _is_quality_event(event):
+            continue
+
+        eventId = _event_id(event)
+
+        if eventId not in eventsById:
+            eventsById[eventId] = event
+        else:
+            # Prefer the version containing clear data when duplicate
+            # lifecycle rows are returned for the same alarm event.
+            existingClear = _clear_time(eventsById[eventId])
+            candidateClear = _clear_time(event)
+
+            if existingClear is None and candidateClear is not None:
+                eventsById[eventId] = event
+
+    return list(eventsById.values())
+
+
+# ----------------------------------------------------------------
+# QUALITY / AVAILABILITY CALCULATIONS
+# ----------------------------------------------------------------
+
+def _overlap_millis(
+    intervalStart,
+    intervalEnd,
+    periodStart,
+    periodEnd
+):
+    if intervalStart is None:
+        return 0
+
+    if intervalEnd is None:
+        intervalEnd = periodEnd
+
+    startMillis = max(
+        system.date.toMillis(intervalStart),
+        system.date.toMillis(periodStart)
+    )
+
+    endMillis = min(
+        system.date.toMillis(intervalEnd),
+        system.date.toMillis(periodEnd)
+    )
+
+    return max(0, endMillis - startMillis)
+
+
+def _quality_summary(periodStart, periodEnd):
+    events = _query_quality_events(
+        periodStart,
+        periodEnd
+    )
+
+    periodMillis = max(
+        1,
+        system.date.toMillis(periodEnd)
+        - system.date.toMillis(periodStart)
+    )
+
+    byEquipmentMillis = {}
+
+    for event in events:
+        overlapMillis = _overlap_millis(
+            _active_time(event),
+            _clear_time(event),
+            periodStart,
+            periodEnd
+        )
+
+        if overlapMillis <= 0:
+            continue
+
+        equipment = _equipment_name(event)
+
+        byEquipmentMillis[equipment] = (
+            byEquipmentMillis.get(equipment, 0)
+            + overlapMillis
+        )
+
+    rows = []
+
+    for equipment, badMillis in byEquipmentMillis.items():
+        badMinutes = float(badMillis) / 60000.0
+        badHours = float(badMillis) / 3600000.0
+        badPercent = (
+            float(badMillis)
+            / float(periodMillis)
+        ) * 100.0
+
+        rows.append({
+            "equipment": equipment,
+            "badMillis": badMillis,
+            "badMinutes": badMinutes,
+            "badHours": badHours,
+            "badPercent": min(100.0, badPercent)
+        })
+
+    rows.sort(
+        key=lambda row: (
+            -row["badMillis"],
+            row["equipment"]
+        )
+    )
+
+    return {
+        "rows": rows
+    }
+
+
+def _format_duration(badMinutes):
+    totalMinutes = int(round(badMinutes))
+    hours = totalMinutes // 60
+    minutes = totalMinutes % 60
+
+    if hours > 0:
+        return "%dh %02dm" % (
+            hours,
+            minutes
+        )
+
+    return "%dm" % minutes
+
+
 # ----------------------------------------------------------------
 # COUNTING AND GROUPING
 # ----------------------------------------------------------------
@@ -341,21 +382,12 @@ def _count_by_equipment(events):
 
     for event in events:
         equipment = _equipment_name(event)
-
-        counts[equipment] = counts.get(
-            equipment,
-            0
-        ) + 1
+        counts[equipment] = counts.get(equipment, 0) + 1
 
     return counts
 
 
 def _count_by_day(events, startDate, numberOfDays):
-    """
-    Returns one row per requested calendar day, including days with
-    zero alerts.
-    """
-
     countsByDate = {}
 
     for event in events:
@@ -393,10 +425,7 @@ def _count_by_day(events, startDate, numberOfDays):
                 currentDate,
                 "EEEE"
             ),
-            "count": countsByDate.get(
-                dateKey,
-                0
-            )
+            "count": countsByDate.get(dateKey, 0)
         })
 
     return rows
@@ -422,15 +451,10 @@ def _sorted_equipment_rows(counts):
 
 
 # ----------------------------------------------------------------
-# COMPARISON HELPERS
+# COMPARISON
 # ----------------------------------------------------------------
 
 def _comparison(currentCount, previousCount):
-    """
-    Returns comparison fields without claiming an infinite percentage
-    increase when the previous period had zero alerts.
-    """
-
     difference = currentCount - previousCount
 
     result = {
@@ -456,18 +480,16 @@ def _comparison(currentCount, previousCount):
                 currentCount
             )
         )
-
         result["htmlText"] = (
             '<span style="color:#b42318;">'
             '&#9650; Up by %d alert%s, from 0 to %d'
-            "</span>"
+            '</span>'
             % (
                 difference,
                 "" if difference == 1 else "s",
                 currentCount
             )
         )
-
         return result
 
     percent = (
@@ -486,11 +508,10 @@ def _comparison(currentCount, previousCount):
                 difference
             )
         )
-
         result["htmlText"] = (
             '<span style="color:#b42318;">'
-            "&#9650; Up %.1f%% (%+d alerts)"
-            "</span>"
+            '&#9650; Up %.1f%% (%+d alerts)'
+            '</span>'
             % (
                 abs(percent),
                 difference
@@ -506,11 +527,10 @@ def _comparison(currentCount, previousCount):
                 difference
             )
         )
-
         result["htmlText"] = (
             '<span style="color:#067647;">'
-            "&#9660; Down %.1f%% (%d alerts)"
-            "</span>"
+            '&#9660; Down %.1f%% (%d alerts)'
+            '</span>'
             % (
                 abs(percent),
                 difference
@@ -521,33 +541,152 @@ def _comparison(currentCount, previousCount):
 
 
 # ----------------------------------------------------------------
-# DAILY REPORT FORMATTING
+# DATA QUALITY FORMATTING
 # ----------------------------------------------------------------
 
-def _daily_plain_text(report):
-    lines = [
-        report["title"].upper(),
+def _append_quality_text(lines, report):
+    lines.extend([
         "",
-        "Reporting period: %s" % report["periodLabel"],
-        "",
-        "%s: %d"
-        % (
-            report["currentLabel"],
-            report["currentCount"]
-        ),
-        "%s: %d"
-        % (
-            report["previousLabel"],
-            report["previousCount"]
-        ),
-        "Change: %s"
-        % report["comparison"]["plainText"],
+        "DATA QUALITY / PLC AVAILABILITY",
+        "Current reporting period:"
+    ])
+
+    qualityRows = report.get("qualityRows", [])
+
+    if qualityRows:
+        for row in qualityRows:
+            lines.append(
+                "%s: %s bad or uncertain quality (%.1f%% of period)"
+                % (
+                    row["equipment"],
+                    _format_duration(row["badMinutes"]),
+                    row["badPercent"]
+                )
+            )
+    else:
+        lines.append("No bad-quality periods recorded.")
+
+    comparisonRows = report.get(
+        "comparisonQualityRows",
+        []
+    )
+
+    if "comparisonQualityLabel" in report:
+        lines.extend([
+            "",
+            report["comparisonQualityLabel"] + ":"
+        ])
+
+        if comparisonRows:
+            for row in comparisonRows:
+                lines.append(
+                    "%s: %s bad or uncertain quality (%.1f%% of period)"
+                    % (
+                        row["equipment"],
+                        _format_duration(row["badMinutes"]),
+                        row["badPercent"]
+                    )
+                )
+        else:
+            lines.append("No bad-quality periods recorded.")
+
+
+def _quality_html(report):
+    sections = []
+
+    currentRows = report.get("qualityRows", [])
+    currentHtml = ""
+
+    if currentRows:
+        for row in currentRows:
+            currentHtml += (
+                "<tr>"
+                "<td style='padding:6px;border-bottom:1px solid #ddd;'>%s</td>"
+                "<td style='padding:6px;border-bottom:1px solid #ddd;text-align:right;'>%s</td>"
+                "<td style='padding:6px;border-bottom:1px solid #ddd;text-align:right;'>%.1f%%</td>"
+                "</tr>"
+                % (
+                    row["equipment"],
+                    _format_duration(row["badMinutes"]),
+                    row["badPercent"]
+                )
+            )
+    else:
+        currentHtml = (
+            "<tr><td colspan='3' style='padding:6px;'>"
+            "No bad-quality periods recorded."
+            "</td></tr>"
+        )
+
+    sections.append(
+        "<h3>Data Quality / PLC Availability</h3>"
+        "<p><strong>Current reporting period</strong></p>"
+        "<table style='border-collapse:collapse;min-width:560px;'>"
+        "<tr>"
+        "<th style='padding:6px;text-align:left;border-bottom:2px solid #666;'>Equipment</th>"
+        "<th style='padding:6px;text-align:right;border-bottom:2px solid #666;'>Bad/Uncertain Duration</th>"
+        "<th style='padding:6px;text-align:right;border-bottom:2px solid #666;'>Percent of Period</th>"
+        "</tr>%s</table>"
+        % currentHtml
+    )
+
+    if "comparisonQualityLabel" in report:
+        comparisonRows = report.get(
+            "comparisonQualityRows",
+            []
+        )
+        comparisonHtml = ""
+
+        if comparisonRows:
+            for row in comparisonRows:
+                comparisonHtml += (
+                    "<tr>"
+                    "<td style='padding:6px;border-bottom:1px solid #ddd;'>%s</td>"
+                    "<td style='padding:6px;border-bottom:1px solid #ddd;text-align:right;'>%s</td>"
+                    "<td style='padding:6px;border-bottom:1px solid #ddd;text-align:right;'>%.1f%%</td>"
+                    "</tr>"
+                    % (
+                        row["equipment"],
+                        _format_duration(row["badMinutes"]),
+                        row["badPercent"]
+                    )
+                )
+        else:
+            comparisonHtml = (
+                "<tr><td colspan='3' style='padding:6px;'>"
+                "No bad-quality periods recorded."
+                "</td></tr>"
+            )
+
+        sections.append(
+            "<p><strong>%s</strong></p>"
+            "<table style='border-collapse:collapse;min-width:560px;'>"
+            "<tr>"
+            "<th style='padding:6px;text-align:left;border-bottom:2px solid #666;'>Equipment</th>"
+            "<th style='padding:6px;text-align:right;border-bottom:2px solid #666;'>Bad/Uncertain Duration</th>"
+            "<th style='padding:6px;text-align:right;border-bottom:2px solid #666;'>Percent of Period</th>"
+            "</tr>%s</table>"
+            % (
+                report["comparisonQualityLabel"],
+                comparisonHtml
+            )
+        )
+
+    return "".join(sections)
+
+
+# ----------------------------------------------------------------
+# SHARED REPORT FORMATTING
+# ----------------------------------------------------------------
+
+def _equipment_text(lines, equipmentRows):
+    lines.extend([
         "",
         "ALERTS BY EQUIPMENT"
-    ]
+    ])
 
-    if report["equipmentRows"]:
-        for row in report["equipmentRows"]:
+    if equipmentRows:
+        for row in equipmentRows:
             lines.append(
                 "%s: %d"
                 % (
@@ -558,21 +697,16 @@ def _daily_plain_text(report):
     else:
         lines.append("No alerts recorded.")
 
-    return "\n".join(lines)
 
+def _equipment_html(equipmentRows):
+    rowsHtml = ""
 
-def _daily_html(report):
-    equipmentRows = ""
-
-    if report["equipmentRows"]:
-        for row in report["equipmentRows"]:
-            equipmentRows += (
+    if equipmentRows:
+        for row in equipmentRows:
+            rowsHtml += (
                 "<tr>"
-                "<td style='padding:6px;"
-                "border-bottom:1px solid #ddd;'>%s</td>"
-                "<td style='padding:6px;"
-                "border-bottom:1px solid #ddd;"
-                "text-align:right;'>%d</td>"
+                "<td style='padding:6px;border-bottom:1px solid #ddd;'>%s</td>"
+                "<td style='padding:6px;border-bottom:1px solid #ddd;text-align:right;'>%d</td>"
                 "</tr>"
                 % (
                     row["equipment"],
@@ -580,78 +714,66 @@ def _daily_html(report):
                 )
             )
     else:
-        equipmentRows = (
-            "<tr>"
-            "<td colspan='2' style='padding:6px;'>"
+        rowsHtml = (
+            "<tr><td colspan='2' style='padding:6px;'>"
             "No alerts recorded."
-            "</td>"
-            "</tr>"
+            "</td></tr>"
         )
 
+    return (
+        "<h3>Alerts by Equipment</h3>"
+        "<table style='border-collapse:collapse;min-width:460px;'>"
+        "<tr>"
+        "<th style='padding:6px;text-align:left;border-bottom:2px solid #666;'>Equipment</th>"
+        "<th style='padding:6px;text-align:right;border-bottom:2px solid #666;'>Alerts</th>"
+        "</tr>%s</table>"
+        % rowsHtml
+    )
+
+
+def _daily_plain_text(report):
+    lines = [
+        report["title"].upper(),
+        "",
+        "Reporting period: %s" % report["periodLabel"],
+        "",
+        "%s: %d" % (
+            report["currentLabel"],
+            report["currentCount"]
+        ),
+        "%s: %d" % (
+            report["previousLabel"],
+            report["previousCount"]
+        ),
+        "Change: %s" % report["comparison"]["plainText"]
+    ]
+
+    _equipment_text(
+        lines,
+        report["equipmentRows"]
+    )
+
+    _append_quality_text(
+        lines,
+        report
+    )
+
+    return "\n".join(lines)
+
+
+def _daily_html(report):
     return """
 <html>
 <body style="font-family:Segoe UI,Arial,sans-serif;color:#222;">
-
     <h2>%s</h2>
-
-    <p>
-        <strong>Reporting period:</strong>
-        %s
-    </p>
-
+    <p><strong>Reporting period:</strong> %s</p>
     <table style="border-collapse:collapse;min-width:460px;">
-        <tr>
-            <td style="padding:6px;">
-                <strong>%s</strong>
-            </td>
-            <td style="padding:6px;text-align:right;">
-                %d
-            </td>
-        </tr>
-
-        <tr>
-            <td style="padding:6px;">
-                <strong>%s</strong>
-            </td>
-            <td style="padding:6px;text-align:right;">
-                %d
-            </td>
-        </tr>
-
-        <tr>
-            <td style="padding:6px;">
-                <strong>Change</strong>
-            </td>
-            <td style="padding:6px;text-align:right;">
-                %s
-            </td>
-        </tr>
+        <tr><td style="padding:6px;"><strong>%s</strong></td><td style="padding:6px;text-align:right;">%d</td></tr>
+        <tr><td style="padding:6px;"><strong>%s</strong></td><td style="padding:6px;text-align:right;">%d</td></tr>
+        <tr><td style="padding:6px;"><strong>Change</strong></td><td style="padding:6px;text-align:right;">%s</td></tr>
     </table>
-
-    <h3>Alerts by Equipment</h3>
-
-    <table style="border-collapse:collapse;min-width:460px;">
-        <tr>
-            <th style="
-                padding:6px;
-                text-align:left;
-                border-bottom:2px solid #666;
-            ">
-                Equipment
-            </th>
-
-            <th style="
-                padding:6px;
-                text-align:right;
-                border-bottom:2px solid #666;
-            ">
-                Alerts
-            </th>
-        </tr>
-
-        %s
-    </table>
-
+    %s
+    %s
 </body>
 </html>
 """ % (
@@ -662,22 +784,25 @@ def _daily_html(report):
         report["previousLabel"],
         report["previousCount"],
         report["comparison"]["htmlText"],
-        equipmentRows
+        _equipment_html(report["equipmentRows"]),
+        _quality_html(report)
     )
 
 
-# ----------------------------------------------------------------
-# WEEKLY REPORT FORMATTING
-# ----------------------------------------------------------------
-
 def _weekly_plain_text(report):
     lines = [
-        "WEEKLY OPERATIONAL ENVELOPE REPORT",
+        report["title"].upper(),
         "",
-        "Reporting week: %s" % report["periodLabel"],
+        "Reporting period: %s" % report["periodLabel"],
         "",
-        "Alerts this reporting week: %d" % report["currentCount"],
-        "Alerts previous week: %d" % report["previousCount"],
+        "%s: %d" % (
+            report["currentLabel"],
+            report["currentCount"]
+        ),
+        "%s: %d" % (
+            report["previousLabel"],
+            report["previousCount"]
+        ),
         "Change: %s" % report["comparison"]["plainText"],
         "",
         "DAILY BREAKDOWN"
@@ -693,31 +818,24 @@ def _weekly_plain_text(report):
             )
         )
 
-    lines.extend([
-        "",
-        "ALERTS BY EQUIPMENT"
-    ])
+    _equipment_text(
+        lines,
+        report["equipmentRows"]
+    )
 
-    if report["equipmentRows"]:
-        for row in report["equipmentRows"]:
-            lines.append(
-                "%s: %d"
-                % (
-                    row["equipment"],
-                    row["count"]
-                )
-            )
-    else:
-        lines.append("No alerts recorded.")
+    _append_quality_text(
+        lines,
+        report
+    )
 
     return "\n".join(lines)
 
 
 def _weekly_html(report):
-    dailyRows = ""
+    dailyRowsHtml = ""
 
     for row in report["dailyRows"]:
-        dailyRows += (
+        dailyRowsHtml += (
             "<tr>"
             "<td style='padding:6px;border-bottom:1px solid #ddd;'>%s</td>"
             "<td style='padding:6px;border-bottom:1px solid #ddd;'>%s</td>"
@@ -730,88 +848,67 @@ def _weekly_html(report):
             )
         )
 
-    equipmentRows = ""
-
-    if report["equipmentRows"]:
-        for row in report["equipmentRows"]:
-            equipmentRows += (
-                "<tr>"
-                "<td style='padding:6px;border-bottom:1px solid #ddd;'>%s</td>"
-                "<td style='padding:6px;border-bottom:1px solid #ddd;text-align:right;'>%d</td>"
-                "</tr>"
-                % (
-                    row["equipment"],
-                    row["count"]
-                )
-            )
-    else:
-        equipmentRows = (
-            "<tr><td colspan='2' style='padding:6px;'>"
-            "No alerts recorded."
-            "</td></tr>"
-        )
-
     return """
 <html>
 <body style="font-family:Segoe UI,Arial,sans-serif;color:#222;">
-    <h2>Weekly Operational Envelope Report</h2>
-
-    <p><strong>Reporting week:</strong> %s</p>
-
+    <h2>%s</h2>
+    <p><strong>Reporting period:</strong> %s</p>
     <table style="border-collapse:collapse;min-width:460px;">
-        <tr>
-            <td style="padding:6px;"><strong>Alerts this week</strong></td>
-            <td style="padding:6px;text-align:right;">%d</td>
-        </tr>
-        <tr>
-            <td style="padding:6px;"><strong>Alerts previous week</strong></td>
-            <td style="padding:6px;text-align:right;">%d</td>
-        </tr>
-        <tr>
-            <td style="padding:6px;"><strong>Change</strong></td>
-            <td style="padding:6px;text-align:right;">%s</td>
-        </tr>
+        <tr><td style="padding:6px;"><strong>%s</strong></td><td style="padding:6px;text-align:right;">%d</td></tr>
+        <tr><td style="padding:6px;"><strong>%s</strong></td><td style="padding:6px;text-align:right;">%d</td></tr>
+        <tr><td style="padding:6px;"><strong>Change</strong></td><td style="padding:6px;text-align:right;">%s</td></tr>
     </table>
-
     <h3>Daily Breakdown</h3>
-
     <table style="border-collapse:collapse;min-width:460px;">
         <tr>
-            <th style="padding:6px;text-align:left;border-bottom:2px solid #666;">
-                Day
-            </th>
-            <th style="padding:6px;text-align:left;border-bottom:2px solid #666;">
-                Date
-            </th>
-            <th style="padding:6px;text-align:right;border-bottom:2px solid #666;">
-                Alerts
-            </th>
+            <th style="padding:6px;text-align:left;border-bottom:2px solid #666;">Day</th>
+            <th style="padding:6px;text-align:left;border-bottom:2px solid #666;">Date</th>
+            <th style="padding:6px;text-align:right;border-bottom:2px solid #666;">Alerts</th>
         </tr>
         %s
     </table>
-
-    <h3>Alerts by Equipment</h3>
-
-    <table style="border-collapse:collapse;min-width:460px;">
-        <tr>
-            <th style="padding:6px;text-align:left;border-bottom:2px solid #666;">
-                Equipment
-            </th>
-            <th style="padding:6px;text-align:right;border-bottom:2px solid #666;">
-                Alerts
-            </th>
-        </tr>
-        %s
-    </table>
+    %s
+    %s
 </body>
 </html>
 """ % (
+        report["title"],
         report["periodLabel"],
+        report["currentLabel"],
         report["currentCount"],
+        report["previousLabel"],
         report["previousCount"],
         report["comparison"]["htmlText"],
-        dailyRows,
-        equipmentRows
+        dailyRowsHtml,
+        _equipment_html(report["equipmentRows"]),
+        _quality_html(report)
+    )
+
+
+# ----------------------------------------------------------------
+# WEEK BOUNDARY
+# ----------------------------------------------------------------
+
+def _start_of_current_week(referenceDate):
+    from java.util import Calendar
+
+    dayStart = system.date.midnight(referenceDate)
+    calendar = Calendar.getInstance()
+    calendar.setTime(dayStart)
+
+    javaDayOfWeek = calendar.get(
+        Calendar.DAY_OF_WEEK
+    )
+
+    daysSinceMonday = (
+        javaDayOfWeek
+        - Calendar.MONDAY
+        + 7
+    ) % 7
+
+    return system.date.addDays(
+        dayStart,
+        -daysSinceMonday
     )
 
 
@@ -820,36 +917,12 @@ def _weekly_html(report):
 # ----------------------------------------------------------------
 
 def getCurrentDayReport(referenceDate=None):
-    """
-    Builds an in-progress report for the current calendar day.
-
-    The current period is:
-        Today at midnight through the current time.
-
-    The comparison period is:
-        Yesterday at midnight through the same elapsed time.
-
-    Example:
-        If run today at 2:30 PM:
-
-        Current:
-            Today, 12:00 AM through 2:30 PM
-
-        Comparison:
-            Yesterday, 12:00 AM through 2:30 PM
-    """
-
     if referenceDate is None:
         referenceDate = system.date.now()
 
     now = referenceDate
-
     todayStart = system.date.midnight(now)
-
-    yesterdayStart = system.date.addDays(
-        todayStart,
-        -1
-    )
+    yesterdayStart = system.date.addDays(todayStart, -1)
 
     elapsedMillis = (
         system.date.toMillis(now)
@@ -871,6 +944,16 @@ def getCurrentDayReport(referenceDate=None):
         yesterdaySameTime
     )
 
+    currentQuality = _quality_summary(
+        todayStart,
+        now
+    )
+
+    previousQuality = _quality_summary(
+        yesterdayStart,
+        yesterdaySameTime
+    )
+
     currentCount = len(todayEvents)
     previousCount = len(yesterdayEvents)
 
@@ -879,49 +962,28 @@ def getCurrentDayReport(referenceDate=None):
         "h:mm a"
     )
 
-    periodLabel = (
-        "%s, midnight through %s"
-        % (
-            _format_date(todayStart),
-            currentTimeLabel
-        )
-    )
-
     report = {
         "reportType": "currentDay",
         "title": "Current-Day Operational Envelope Report",
-
         "periodStart": todayStart,
         "periodEnd": now,
-
         "comparisonStart": yesterdayStart,
         "comparisonEnd": yesterdaySameTime,
-
-        "periodLabel": periodLabel,
-
-        "currentLabel": (
-            "Alerts today through %s"
-            % currentTimeLabel
+        "periodLabel": "%s, midnight through %s" % (
+            _format_date(todayStart),
+            currentTimeLabel
         ),
-
-        "previousLabel": (
-            "Alerts yesterday through %s"
-            % currentTimeLabel
-        ),
-
+        "currentLabel": "Alerts today through %s" % currentTimeLabel,
+        "previousLabel": "Alerts yesterday through %s" % currentTimeLabel,
         "currentCount": currentCount,
         "previousCount": previousCount,
-
-        "comparison": _comparison(
-            currentCount,
-            previousCount
-        ),
-
+        "comparison": _comparison(currentCount, previousCount),
         "equipmentRows": _sorted_equipment_rows(
-            _count_by_equipment(
-                todayEvents
-            )
-        )
+            _count_by_equipment(todayEvents)
+        ),
+        "qualityRows": currentQuality["rows"],
+        "comparisonQualityRows": previousQuality["rows"],
+        "comparisonQualityLabel": "Yesterday through the same time"
     }
 
     report["subject"] = (
@@ -931,40 +993,19 @@ def getCurrentDayReport(referenceDate=None):
             currentTimeLabel
         )
     )
-
     report["text"] = _daily_plain_text(report)
     report["html"] = _daily_html(report)
 
     return report
 
+
 def getDailyReport(referenceDate=None):
-    """
-    Builds a report for the latest completed calendar day.
-
-    Example:
-        If run on October 28:
-
-        Current period:
-            October 27, 00:00 through 23:59:59
-
-        Comparison period:
-            October 26, 00:00 through 23:59:59
-    """
-
     if referenceDate is None:
         referenceDate = system.date.now()
 
     todayStart = system.date.midnight(referenceDate)
-
-    yesterdayStart = system.date.addDays(
-        todayStart,
-        -1
-    )
-
-    previousDayStart = system.date.addDays(
-        todayStart,
-        -2
-    )
+    yesterdayStart = system.date.addDays(todayStart, -1)
+    previousDayStart = system.date.addDays(todayStart, -2)
 
     yesterdayEvents = _query_active_events(
         yesterdayStart,
@@ -972,6 +1013,16 @@ def getDailyReport(referenceDate=None):
     )
 
     previousDayEvents = _query_active_events(
+        previousDayStart,
+        yesterdayStart
+    )
+
+    currentQuality = _quality_summary(
+        yesterdayStart,
+        todayStart
+    )
+
+    previousQuality = _quality_summary(
         previousDayStart,
         yesterdayStart
     )
@@ -986,97 +1037,37 @@ def getDailyReport(referenceDate=None):
         "periodEnd": todayStart,
         "comparisonStart": previousDayStart,
         "comparisonEnd": yesterdayStart,
-
-        "periodLabel": _format_date(
-            yesterdayStart
-        ),
-
+        "periodLabel": _format_date(yesterdayStart),
         "currentLabel": "Alerts yesterday",
         "previousLabel": "Alerts previous day",
-
         "currentCount": currentCount,
         "previousCount": previousCount,
-
-        "comparison": _comparison(
-            currentCount,
-            previousCount
-        ),
-
+        "comparison": _comparison(currentCount, previousCount),
         "equipmentRows": _sorted_equipment_rows(
-            _count_by_equipment(
-                yesterdayEvents
-            )
-        )
+            _count_by_equipment(yesterdayEvents)
+        ),
+        "qualityRows": currentQuality["rows"],
+        "comparisonQualityRows": previousQuality["rows"],
+        "comparisonQualityLabel": "Previous calendar day"
     }
 
     report["subject"] = (
         "Daily Envelope Report - %s"
         % _format_short_date(yesterdayStart)
     )
-
     report["text"] = _daily_plain_text(report)
     report["html"] = _daily_html(report)
 
     return report
 
 
-def _start_of_current_week(referenceDate):
-    """
-    Returns midnight Monday for the week containing referenceDate.
-    """
-
-    from java.util import Calendar
-
-    dayStart = system.date.midnight(referenceDate)
-
-    calendar = Calendar.getInstance()
-    calendar.setTime(dayStart)
-
-    javaDayOfWeek = calendar.get(
-        Calendar.DAY_OF_WEEK
-    )
-
-    # Java:
-    # Sunday = 1
-    # Monday = 2
-    # ...
-    # Saturday = 7
-    #
-    # Convert into days since Monday.
-    daysSinceMonday = (
-        javaDayOfWeek
-        - Calendar.MONDAY
-        + 7
-    ) % 7
-
-    return system.date.addDays(
-        dayStart,
-        -daysSinceMonday
-    )
-
-
 def getWeeklyReport(referenceDate=None):
-    """
-    Creates a report for the last complete Monday-Sunday week and
-    compares that week against the complete week before it.
-    """
-
     if referenceDate is None:
         referenceDate = system.date.now()
 
-    currentWeekStart = _start_of_current_week(
-        referenceDate
-    )
-
-    reportingWeekStart = system.date.addWeeks(
-        currentWeekStart,
-        -1
-    )
-
-    previousWeekStart = system.date.addWeeks(
-        currentWeekStart,
-        -2
-    )
+    currentWeekStart = _start_of_current_week(referenceDate)
+    reportingWeekStart = system.date.addWeeks(currentWeekStart, -1)
+    previousWeekStart = system.date.addWeeks(currentWeekStart, -2)
 
     reportingWeekEvents = _query_active_events(
         reportingWeekStart,
@@ -1088,11 +1079,22 @@ def getWeeklyReport(referenceDate=None):
         reportingWeekStart
     )
 
+    currentQuality = _quality_summary(
+        reportingWeekStart,
+        currentWeekStart
+    )
+
+    previousQuality = _quality_summary(
+        previousWeekStart,
+        reportingWeekStart
+    )
+
     currentCount = len(reportingWeekEvents)
     previousCount = len(previousWeekEvents)
 
     report = {
         "reportType": "weekly",
+        "title": "Weekly Operational Envelope Report",
         "periodStart": reportingWeekStart,
         "periodEnd": currentWeekStart,
         "comparisonStart": previousWeekStart,
@@ -1101,29 +1103,28 @@ def getWeeklyReport(referenceDate=None):
             reportingWeekStart,
             currentWeekStart
         ),
+        "currentLabel": "Alerts this reporting week",
+        "previousLabel": "Alerts previous week",
         "currentCount": currentCount,
         "previousCount": previousCount,
-        "comparison": _comparison(
-            currentCount,
-            previousCount
-        ),
+        "comparison": _comparison(currentCount, previousCount),
         "dailyRows": _count_by_day(
             reportingWeekEvents,
             reportingWeekStart,
             7
         ),
         "equipmentRows": _sorted_equipment_rows(
-            _count_by_equipment(
-                reportingWeekEvents
-            )
-        )
+            _count_by_equipment(reportingWeekEvents)
+        ),
+        "qualityRows": currentQuality["rows"],
+        "comparisonQualityRows": previousQuality["rows"],
+        "comparisonQualityLabel": "Previous completed week"
     }
 
     report["subject"] = (
         "Weekly Envelope Report - %s"
         % report["periodLabel"]
     )
-
     report["text"] = _weekly_plain_text(report)
     report["html"] = _weekly_html(report)
 
@@ -1131,43 +1132,15 @@ def getWeeklyReport(referenceDate=None):
 
 
 def getWeekToDateReport(referenceDate=None):
-    """
-    Builds an in-progress week-to-date report.
-
-    Current period:
-        Monday at midnight through the current date/time.
-
-    Comparison period:
-        Previous Monday at midnight through the equivalent
-        weekday/time during the previous week.
-
-    Example:
-        If run Wednesday at 11:00 AM:
-
-        Current:
-            Monday 00:00 through Wednesday 11:00
-
-        Previous:
-            Previous Monday 00:00 through previous Wednesday 11:00
-    """
+    from java.util import Calendar
 
     if referenceDate is None:
         referenceDate = system.date.now()
 
     now = referenceDate
+    currentWeekStart = _start_of_current_week(now)
+    previousWeekStart = system.date.addWeeks(currentWeekStart, -1)
 
-    # Start of the current Monday-Sunday week.
-    currentWeekStart = _start_of_current_week(
-        now
-    )
-
-    # Start of previous week.
-    previousWeekStart = system.date.addWeeks(
-        currentWeekStart,
-        -1
-    )
-
-    # Match the exact elapsed time into the week.
     elapsedMillis = (
         system.date.toMillis(now)
         - system.date.toMillis(currentWeekStart)
@@ -1177,10 +1150,6 @@ def getWeekToDateReport(referenceDate=None):
         system.date.toMillis(previousWeekStart)
         + elapsedMillis
     )
-
-    # --------------------------------------------------------
-    # QUERY JOURNAL EVENTS
-    # --------------------------------------------------------
 
     currentEvents = _query_active_events(
         currentWeekStart,
@@ -1192,190 +1161,95 @@ def getWeekToDateReport(referenceDate=None):
         previousWeekEquivalentEnd
     )
 
-    currentCount = len(currentEvents)
-    previousCount = len(previousEvents)
+    currentQuality = _quality_summary(
+        currentWeekStart,
+        now
+    )
 
-    # --------------------------------------------------------
-    # DAILY BREAKDOWN
-    # --------------------------------------------------------
-
-    # Determine how many calendar days of the current week
-    # need to appear in the report.
-    from java.util import Calendar
+    previousQuality = _quality_summary(
+        previousWeekStart,
+        previousWeekEquivalentEnd
+    )
 
     calendar = Calendar.getInstance()
     calendar.setTime(now)
 
-    javaDayOfWeek = calendar.get(
-        Calendar.DAY_OF_WEEK
-    )
-
     daysSinceMonday = (
-        javaDayOfWeek
+        calendar.get(Calendar.DAY_OF_WEEK)
         - Calendar.MONDAY
         + 7
     ) % 7
 
     numberOfDays = daysSinceMonday + 1
+    currentCount = len(currentEvents)
+    previousCount = len(previousEvents)
 
-    dailyRows = _count_by_day(
-        currentEvents,
-        currentWeekStart,
-        numberOfDays
-    )
-
-    # --------------------------------------------------------
-    # REPORT LABEL
-    # --------------------------------------------------------
-
-    periodLabel = (
-        "%s through %s"
-        % (
-            system.date.format(
-                currentWeekStart,
-                "MMM d, yyyy"
-            ),
-            system.date.format(
-                now,
-                "MMM d, yyyy h:mm a"
-            )
+    periodLabel = "%s through %s" % (
+        system.date.format(
+            currentWeekStart,
+            "MMM d, yyyy"
+        ),
+        system.date.format(
+            now,
+            "MMM d, yyyy h:mm a"
         )
     )
-
-    comparisonLabel = (
-        "%s through %s"
-        % (
-            system.date.format(
-                previousWeekStart,
-                "MMM d, yyyy"
-            ),
-            system.date.format(
-                previousWeekEquivalentEnd,
-                "MMM d, yyyy h:mm a"
-            )
-        )
-    )
-
-    # --------------------------------------------------------
-    # BUILD REPORT
-    # --------------------------------------------------------
 
     report = {
         "reportType": "weekToDate",
-
+        "title": "Week-to-Date Operational Envelope Report",
         "periodStart": currentWeekStart,
         "periodEnd": now,
-
         "comparisonStart": previousWeekStart,
         "comparisonEnd": previousWeekEquivalentEnd,
-
         "periodLabel": periodLabel,
-        "comparisonLabel": comparisonLabel,
-
+        "currentLabel": "Alerts this week to date",
+        "previousLabel": "Alerts previous week to same point",
         "currentCount": currentCount,
         "previousCount": previousCount,
-
-        "comparison": _comparison(
-            currentCount,
-            previousCount
+        "comparison": _comparison(currentCount, previousCount),
+        "dailyRows": _count_by_day(
+            currentEvents,
+            currentWeekStart,
+            numberOfDays
         ),
-
-        "dailyRows": dailyRows,
-
         "equipmentRows": _sorted_equipment_rows(
-            _count_by_equipment(
-                currentEvents
-            )
-        )
+            _count_by_equipment(currentEvents)
+        ),
+        "qualityRows": currentQuality["rows"],
+        "comparisonQualityRows": previousQuality["rows"],
+        "comparisonQualityLabel": "Previous week through the same elapsed point"
     }
-
-    # --------------------------------------------------------
-    # SUBJECT
-    # --------------------------------------------------------
 
     report["subject"] = (
         "Week-to-Date Envelope Report - %s"
-        % system.date.format(
-            now,
-            "yyyy-MM-dd"
-        )
+        % system.date.format(now, "yyyy-MM-dd")
     )
-
-    # --------------------------------------------------------
-    # TEXT FORMAT
-    # --------------------------------------------------------
-
-    lines = [
-        "WEEK-TO-DATE OPERATIONAL ENVELOPE REPORT",
-        "",
-        "Current period:",
-        periodLabel,
-        "",
-        "Comparison period:",
-        comparisonLabel,
-        "",
-        "Alerts this week to date: %d"
-        % currentCount,
-        "Alerts previous week to same point: %d"
-        % previousCount,
-        "Change: %s"
-        % report["comparison"]["plainText"],
-        "",
-        "DAILY BREAKDOWN"
-    ]
-
-    for row in dailyRows:
-        lines.append(
-            "%s (%s): %d"
-            % (
-                row["dayName"],
-                row["dateKey"],
-                row["count"]
-            )
-        )
-
-    lines.extend([
-        "",
-        "ALERTS BY EQUIPMENT"
-    ])
-
-    if report["equipmentRows"]:
-        for row in report["equipmentRows"]:
-            lines.append(
-                "%s: %d"
-                % (
-                    row["equipment"],
-                    row["count"]
-                )
-            )
-    else:
-        lines.append(
-            "No alerts recorded."
-        )
-
-    report["text"] = "\n".join(lines)
+    report["text"] = _weekly_plain_text(report)
+    report["html"] = _weekly_html(report)
 
     return report
 
+
 # ----------------------------------------------------------------
-# OPTIONAL EMAIL FUNCTIONS
-#
-# Do not use these until the SMTP connectivity issue from the
-# Ignition Gateway has been resolved.
+# EMAIL FUNCTIONS
 # ----------------------------------------------------------------
 
 def _send_report(report):
     logger = _logger()
 
     try:
+        body = report.get("html", report["text"])
+        isHtml = "html" in report
+
         system.net.sendEmail(
             smtp="",
             smtpProfile=EMAIL_PROFILE,
             fromAddr=FROM_ADDRESS,
             to=REPORT_RECIPIENTS,
             subject=report["subject"],
-            body=report["html"],
-            html=True,
+            body=body,
+            html=isHtml,
             timeout=30000,
             retries=1
         )
@@ -1391,7 +1265,7 @@ def _send_report(report):
         logger.error(
             "Report email failed | Type=%s | Error=%s"
             % (
-                report["reportType"],
+                report.get("reportType", "unknown"),
                 str(error)
             )
         )
@@ -1400,17 +1274,24 @@ def _send_report(report):
 
 
 def sendCurrentDayReport(referenceDate=None):
-    report = getCurrentDayReport(referenceDate)
+    return _send_report(
+        getCurrentDayReport(referenceDate)
+    )
 
-    return _send_report(report)
 
 def sendDailyReport(referenceDate=None):
-    report = getDailyReport(referenceDate)
+    return _send_report(
+        getDailyReport(referenceDate)
+    )
 
-    return _send_report(report)
+
+def sendWeekToDateReport(referenceDate=None):
+    return _send_report(
+        getWeekToDateReport(referenceDate)
+    )
 
 
 def sendWeeklyReport(referenceDate=None):
-    report = getWeeklyReport(referenceDate)
-
-    return _send_report(report)
+    return _send_report(
+        getWeeklyReport(referenceDate)
+    )
