@@ -2,7 +2,7 @@
 
 ## Overview
 
-Please refer to the attached deck for the most in depth and up to date instructions. This README serves as a supplemental material.
+**Please refer to the attached deck for the most in depth and up to date instructions. This README serves as a supplemental material.**
 
 This project implements reusable operational-envelope anomaly detection for servo tags in Ignition. The implementation consists of:
 
