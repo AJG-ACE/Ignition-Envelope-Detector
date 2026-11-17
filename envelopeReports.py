@@ -7,7 +7,7 @@
 # CONFIGURATION
 # ----------------------------------------------------------------
 
-JOURNAL_NAME = "Envelope_Alerts"
+JOURNAL_NAME = "Envelope_Alerts" # Enter name of journal that will contain the alarms
 SOURCE_TEXT_REQUIRED = "Anomaly_Detection"
 FINAL_ALARM_TAG_NAME = "Hourly_Alert_Pulse"
 
@@ -15,11 +15,11 @@ QUALITY_ALARM_TAG_NAME = "Input_Bad_Quality"
 QUALITY_ALARM_NAME = "Input_Bad_Quality_Event"
 QUALITY_LOOKBACK_DAYS = 30
 
-EMAIL_PROFILE = "DPSG notifications"
+EMAIL_PROFILE = "DPSG notifications" # Change to name of Ignition Email Profile for given site
 FROM_ADDRESS = "ignition-alerts@kdrp.com"
 
 REPORT_RECIPIENTS = [
-    "ashur.george@kdrp.com"
+    # Enter Report Recipients
 ]
 
 LOGGER_NAME = "EnvelopeReports"
@@ -163,33 +163,112 @@ def _equipment_name(event):
 # ALARM EVENT TIME HELPERS
 # ----------------------------------------------------------------
 
-def _active_time(event):
+def _as_date(value):
+    """
+    Converts supported alarm-journal timestamp values into java.util.Date.
+    Returns None when the value cannot safely be converted.
+    """
+
+    if value is None:
+        return None
+
+    from java.util import Date
+
+    # Already a Java Date.
+    if isinstance(value, Date):
+        return value
+
+    # Some journal values may expose getTime().
     try:
-        activeData = event.getActiveData()
-        if activeData is not None:
-            return activeData.getTimestamp()
+        return Date(
+            long(value.getTime())
+        )
     except:
         pass
 
+    # Millisecond timestamp.
     try:
-        return event.get("activeTime")
+        return system.date.fromMillis(
+            long(value)
+        )
     except:
-        return None
+        pass
 
+    # Last resort: common string date formats.
+    text = str(value)
+
+    formats = [
+        "yyyy-MM-dd HH:mm:ss.SSS",
+        "yyyy-MM-dd HH:mm:ss",
+        "EEE MMM dd HH:mm:ss z yyyy"
+    ]
+
+    for pattern in formats:
+        try:
+            return system.date.parse(
+                text,
+                pattern
+            )
+        except:
+            pass
+
+    return None
+
+def _active_time(event):
+    try:
+        activeData = event.getActiveData()
+
+        if activeData is not None:
+            value = activeData.getTimestamp()
+
+            result = _as_date(value)
+
+            if result is not None:
+                return result
+    except:
+        pass
+
+    for propertyName in [
+        "activeTime",
+        "eventTime"
+    ]:
+        try:
+            result = _as_date(
+                event.get(propertyName)
+            )
+
+            if result is not None:
+                return result
+        except:
+            pass
+
+    return None
 
 def _clear_time(event):
     try:
         clearData = event.getClearedData()
+
         if clearData is not None:
-            return clearData.getTimestamp()
+            value = clearData.getTimestamp()
+
+            result = _as_date(value)
+
+            if result is not None:
+                return result
     except:
         pass
 
     try:
-        return event.get("clearTime")
-    except:
-        return None
+        result = _as_date(
+            event.get("clearTime")
+        )
 
+        if result is not None:
+            return result
+    except:
+        pass
+
+    return None
 
 def _is_quality_event(event):
     text = _event_text(event)
@@ -278,9 +357,35 @@ def _overlap_millis(
     periodStart,
     periodEnd
 ):
+    intervalStart = _as_date(
+        intervalStart
+    )
+
+    intervalEnd = _as_date(
+        intervalEnd
+    )
+
+    periodStart = _as_date(
+        periodStart
+    )
+
+    periodEnd = _as_date(
+        periodEnd
+    )
+
+    # No valid start means we cannot calculate this episode.
     if intervalStart is None:
         return 0
 
+    # The reporting period must always be valid.
+    if (
+        periodStart is None
+        or periodEnd is None
+    ):
+        return 0
+
+    # No clear timestamp means:
+    # "still bad through the end of this reporting period."
     if intervalEnd is None:
         intervalEnd = periodEnd
 
@@ -294,8 +399,13 @@ def _overlap_millis(
         system.date.toMillis(periodEnd)
     )
 
-    return max(0, endMillis - startMillis)
+    if endMillis <= startMillis:
+        return 0
 
+    return (
+        endMillis
+        - startMillis
+    )
 
 def _quality_summary(periodStart, periodEnd):
     events = _query_quality_events(
